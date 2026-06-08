@@ -1,6 +1,7 @@
 """
 🚗 Estadísticas de Precios de Autos en Chile
 Streamlit app — optimizada para mobile y desktop
+Fuente: Autocosmos.cl
 """
 import streamlit as st
 import pandas as pd
@@ -18,20 +19,17 @@ st.set_page_config(
     page_icon="🚗",
     layout="wide",
     initial_sidebar_state="collapsed",
-    menu_items={"About": "Estadísticas de precios de autos en Chile · MercadoLibre Chile API"},
+    menu_items={"About": "Estadísticas de precios de autos en Chile · Autocosmos.cl"},
 )
 
-COLORS    = px.colors.qualitative.Bold
-TEMPLATE  = "plotly_white"
+COLORS   = px.colors.qualitative.Bold
+TEMPLATE = "plotly_white"
 
 # ─── CSS mobile-friendly ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    /* Reducir padding en mobile */
     .block-container { padding: 1rem 1rem 2rem; max-width: 1200px; }
-    /* Tabs más compactos */
     .stTabs [data-baseweb="tab"] { font-size: 13px; padding: 6px 12px; }
-    /* KPI cards */
     .kpi-card {
         background: #f0f4ff;
         border-radius: 10px;
@@ -40,17 +38,13 @@ st.markdown("""
         margin-bottom: 8px;
         border-left: 4px solid #3b82f6;
     }
-    .kpi-val  { font-size: 22px; font-weight: 700; color: #1e3a8a; }
-    .kpi-lbl  { font-size: 12px; color: #6b7280; margin-top: 2px; }
-    /* Ocultar footer */
+    .kpi-val { font-size: 22px; font-weight: 700; }
+    .kpi-lbl { font-size: 12px; color: #6b7280; margin-top: 2px; }
     footer { visibility: hidden; }
-    /* Fuente más legible */
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-
-# ─── Sidebar — Filtros ────────────────────────────────────────────────────────
+# ─── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Configuración")
 
@@ -58,41 +52,42 @@ with st.sidebar:
         "Marcas a analizar",
         options=scraper.MARCAS_DEFAULT,
         default=scraper.MARCAS_DEFAULT,
-        help="Selecciona las marcas que quieres comparar",
     )
 
-    max_por_marca = st.slider(
-        "Avisos por marca",
-        min_value=20, max_value=200, value=100, step=20,
-        help="Más avisos = más precisión pero más tiempo de carga",
+    incluir_nuevos = st.toggle("Incluir autos nuevos", value=True)
+
+    extra_pags = st.slider(
+        "Páginas generales extra",
+        min_value=0, max_value=10, value=3,
+        help="Páginas adicionales con mezcla de marcas (48 avisos c/u)",
     )
 
     st.divider()
     actualizar = st.button("🔄 Actualizar datos", use_container_width=True, type="primary")
+    st.caption("Fuente: Autocosmos.cl\nDatos en tiempo real al presionar el botón.")
 
-    st.caption(
-        f"Fuente: MercadoLibre Chile (API pública)\n\n"
-        f"Los datos se cargan en tiempo real al presionar el botón."
+
+# ─── Cache ────────────────────────────────────────────────────────────────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_data(marcas: tuple, include_new: bool, extra_pages: int) -> pd.DataFrame:
+    return scraper.fetch_all(
+        marcas=list(marcas),
+        include_new=include_new,
+        extra_general_pages=extra_pages,
     )
-
-
-# ─── Data loading con caché ───────────────────────────────────────────────────
-@st.cache_data(ttl=1800, show_spinner=False)   # cache 30 min
-def load_data(marcas: tuple, max_per_brand: int) -> pd.DataFrame:
-    return scraper.fetch_all(list(marcas), max_per_brand)
 
 
 # ─── Header ──────────────────────────────────────────────────────────────────
 st.title("🚗 Mercado de Autos en Chile")
-st.caption("Estadísticas avanzadas en tiempo real · MercadoLibre Chile")
+st.caption("Estadísticas avanzadas en tiempo real · Autocosmos.cl")
 
-# Trigger de carga
+# Carga de datos
 if "df" not in st.session_state or actualizar:
     if not marcas_sel:
         st.warning("Selecciona al menos una marca en el panel lateral.")
         st.stop()
 
-    prog_bar  = st.progress(0, text="Iniciando descarga…")
+    prog_bar  = st.progress(0, text="Iniciando…")
     prog_text = st.empty()
 
     def on_progress(marca, current, total):
@@ -100,18 +95,16 @@ if "df" not in st.session_state or actualizar:
         prog_bar.progress(pct, text=f"Descargando {marca}…" if marca else "Procesando…")
         prog_text.caption(f"{current}/{total} marcas")
 
-    with st.spinner("Obteniendo datos de MercadoLibre Chile…"):
-        df = load_data(tuple(marcas_sel), max_por_marca)
+    with st.spinner("Obteniendo datos de Autocosmos.cl…"):
+        df = load_data(tuple(marcas_sel), incluir_nuevos, extra_pags)
 
     prog_bar.empty()
     prog_text.empty()
-    st.session_state["df"]       = df
-    st.session_state["ts"]       = datetime.now().strftime("%d/%m/%Y %H:%M")
-    st.session_state["usd_clp"]  = scraper.get_usd_clp()
+    st.session_state["df"] = df
+    st.session_state["ts"] = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-df      = st.session_state["df"]
-ts      = st.session_state["ts"]
-usd_clp = st.session_state["usd_clp"]
+df = st.session_state["df"]
+ts = st.session_state["ts"]
 
 if df.empty:
     st.error("No se obtuvieron datos. Intenta de nuevo.")
@@ -121,55 +114,49 @@ if df.empty:
 with st.expander("🔍 Filtrar resultados", expanded=False):
     col1, col2, col3 = st.columns(3)
     with col1:
-        cond_sel = st.multiselect(
-            "Condición", ["Nuevo", "Usado", "No especificado"],
-            default=["Nuevo", "Usado", "No especificado"],
-        )
+        cond_opts = sorted(df["condicion"].dropna().unique().tolist())
+        cond_sel  = st.multiselect("Condición", cond_opts, default=cond_opts)
     with col2:
-        precio_rng = st.slider(
-            "Precio (millones CLP)",
-            float(df["precio_m"].min()),
-            min(float(df["precio_m"].max()), 300.0),
-            (float(df["precio_m"].min()), min(float(df["precio_m"].max()), 300.0)),
-        )
+        pmin = float(df["precio_m"].min())
+        pmax = min(float(df["precio_m"].max()), 300.0)
+        precio_rng = st.slider("Precio (millones CLP)", pmin, pmax, (pmin, pmax))
     with col3:
         anio_vals = df["anio_num"].dropna()
         if len(anio_vals):
             anio_rng = st.slider(
-                "Año",
-                int(anio_vals.min()), int(anio_vals.max()),
+                "Año", int(anio_vals.min()), int(anio_vals.max()),
                 (int(anio_vals.min()), int(anio_vals.max())),
             )
         else:
             anio_rng = (1990, datetime.now().year)
 
 mask = (
-    df["condicion_es"].isin(cond_sel) &
+    df["condicion"].isin(cond_sel) &
     df["precio_m"].between(*precio_rng) &
     (df["anio_num"].isna() | df["anio_num"].between(*anio_rng))
 )
 dff = df[mask].copy()
 
 st.caption(
-    f"📋 {len(dff):,} avisos · {dff['marca'].nunique()} marcas · "
-    f"Actualizado: {ts} · USD/CLP: {usd_clp:,.0f}"
+    f"📋 **{len(dff):,}** avisos · **{dff['marca'].nunique()}** marcas · "
+    f"Actualizado: {ts}"
 )
 
 # ─── KPI cards ───────────────────────────────────────────────────────────────
-nuevos  = (dff["condicion_es"] == "Nuevo").sum()
-usados  = (dff["condicion_es"] == "Usado").sum()
+nuevos  = (dff["condicion"] == "Nuevo").sum()
+usados  = (dff["condicion"] == "Usado").sum()
 med_p   = dff["precio_m"].median()
 prom_p  = dff["precio_m"].mean()
 med_km  = dff["km"].median()
 n_mod   = dff["modelo"].nunique()
 
 kpis = [
-    (f"{len(dff):,}",          "Total avisos",       "#3b82f6"),
-    (f"{nuevos:,}",            "Nuevos",             "#10b981"),
-    (f"{usados:,}",            "Usados",             "#f59e0b"),
-    (f"${med_p:.1f}M",         "Precio mediano",     "#8b5cf6"),
-    (f"${prom_p:.1f}M",        "Precio promedio",    "#ec4899"),
-    (f"{n_mod}",               "Modelos únicos",     "#06b6d4"),
+    (f"{len(dff):,}",       "Total avisos",    "#3b82f6"),
+    (f"{nuevos:,}",         "Nuevos",          "#10b981"),
+    (f"{usados:,}",         "Usados",          "#f59e0b"),
+    (f"${med_p:.1f}M",      "Precio mediano",  "#8b5cf6"),
+    (f"${prom_p:.1f}M",     "Precio promedio", "#ec4899"),
+    (f"{n_mod}",            "Modelos únicos",  "#06b6d4"),
 ]
 if not np.isnan(med_km):
     kpis.append((f"{med_km/1000:.0f}k km", "Km medianos (usado)", "#64748b"))
@@ -187,18 +174,17 @@ st.divider()
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Por Marca", "📉 Depreciación", "🛣️ Kilometraje", "⛽ Otros", "🏆 Modelos"
+    "📊 Por Marca", "📉 Depreciación", "🛣️ Kilometraje", "⛽ Otros", "🏆 Modelos",
 ])
 
 # ── TAB 1: Por marca ──────────────────────────────────────────────────────────
 with tab1:
     top_marcas = dff["marca"].value_counts().head(12).index.tolist()
     df_tm      = dff[dff["marca"].isin(top_marcas)]
+    orden      = df_tm.groupby("marca")["precio_m"].median().sort_values().index.tolist()
 
     c1, c2 = st.columns([3, 2])
-
     with c1:
-        orden = df_tm.groupby("marca")["precio_m"].median().sort_values().index.tolist()
         fig = px.box(
             df_tm, x="marca", y="precio_m",
             category_orders={"marca": orden},
@@ -217,7 +203,7 @@ with tab1:
             Promedio=("precio_m", "mean"),
             Mín=("precio_m", "min"),
             Máx=("precio_m", "max"),
-            Avisos=("id", "count"),
+            Avisos=("url", "count"),
         ).round(1).sort_values("Mediana")
         st.dataframe(
             brand_stats.style.background_gradient(subset=["Mediana"], cmap="Blues"),
@@ -225,23 +211,18 @@ with tab1:
         )
 
     # Percentiles
-    percentiles = [10, 25, 50, 75, 90]
     perc = (
         df_tm.groupby("marca")["precio_m"]
-        .quantile([p/100 for p in percentiles])
-        .unstack()
-        .round(1)
-        .sort_values(0.5)
+        .quantile([0.10, 0.25, 0.50, 0.75, 0.90])
+        .unstack().round(1).sort_values(0.5)
     )
-    perc.columns = [f"P{p}" for p in percentiles]
+    perc.columns = ["P10", "P25", "P50", "P75", "P90"]
     color_map = {"P10": "#bfdbfe", "P25": "#60a5fa", "P50": "#1d4ed8",
                  "P75": "#f97316", "P90": "#dc2626"}
     fig2 = go.Figure()
     for p_col in perc.columns:
-        fig2.add_trace(go.Bar(
-            name=p_col, x=perc.index, y=perc[p_col],
-            marker_color=color_map[p_col],
-        ))
+        fig2.add_trace(go.Bar(name=p_col, x=perc.index, y=perc[p_col],
+                              marker_color=color_map[p_col]))
     fig2.update_layout(
         barmode="group", title="Percentiles de precio por marca",
         yaxis_title="M CLP", xaxis_title="",
@@ -264,17 +245,16 @@ with tab2:
     )
 
     fig = px.line(
-        dep_data, x="anio_num", y="precio_m", color="marca",
-        markers=True,
+        dep_data, x="anio_num", y="precio_m", color="marca", markers=True,
         labels={"anio_num": "Año del vehículo", "precio_m": "Precio mediano (M CLP)", "marca": "Marca"},
         title="📉 Curva de depreciación — precio mediano por año de fabricación",
-        color_discrete_sequence=COLORS, template=TEMPLATE, height=400,
+        color_discrete_sequence=COLORS, template=TEMPLATE, height=420,
     )
     fig.update_traces(line=dict(width=2.5))
     fig.update_layout(margin=dict(t=50, b=10))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Heatmap
+    # Heatmap marca × año
     df_h = (
         df_dep[df_dep["marca"].isin(top8) & (df_dep["anio_num"] >= 2012)]
         .groupby(["marca", "anio_num"])["precio_m"]
@@ -285,11 +265,10 @@ with tab2:
             z=df_h.values,
             x=[str(int(c)) for c in df_h.columns],
             y=df_h.index.tolist(),
-            colorscale="Blues",
+            colorscale="Blues", colorbar_title="M CLP",
             text=df_h.values.round(1),
             texttemplate="%{text}M",
             hoverongaps=False,
-            colorbar_title="M CLP",
         ))
         fig2.update_layout(
             title="🗺️ Mapa de calor — Marca × Año (precio mediano)",
@@ -301,18 +280,18 @@ with tab2:
 
 # ── TAB 3: Kilometraje ────────────────────────────────────────────────────────
 with tab3:
-    df_km = dff.dropna(subset=["km"])
+    df_km = dff.dropna(subset=["km"]).copy()
     df_km = df_km[(df_km["km"] > 100) & (df_km["km"] < 400_000)]
     top8  = dff["marca"].value_counts().head(8).index.tolist()
-    df_km = df_km[df_km["marca"].isin(top8)]
 
     if len(df_km) > 10:
         fig = px.scatter(
-            df_km, x="km", y="precio_m", color="marca",
+            df_km[df_km["marca"].isin(top8)],
+            x="km", y="precio_m", color="marca",
             opacity=0.55, trendline="lowess", trendline_scope="overall",
             labels={"km": "Kilometraje", "precio_m": "Precio (M CLP)", "marca": "Marca"},
             title="🛣️ Precio vs Kilometraje (tendencia global en negro)",
-            color_discrete_sequence=COLORS, template=TEMPLATE, height=400,
+            color_discrete_sequence=COLORS, template=TEMPLATE, height=420,
         )
         fig.update_traces(marker=dict(size=5))
         fig.update_layout(margin=dict(t=50, b=10))
@@ -327,18 +306,18 @@ with tab3:
     df_km2 = df_km2[(df_km2["km"] > 100) & (df_km2["km"] < 400_000)].copy()
     if not df_km2.empty:
         df_km2["rango_km"] = pd.cut(df_km2["km"], bins=bins, labels=labels)
-        rng_stats = (
+        rng = (
             df_km2.groupby("rango_km", observed=True)["precio_m"]
             .agg(mediana="median", avisos="count").reset_index()
         )
         fig2 = make_subplots(specs=[[{"secondary_y": True}]])
         fig2.add_trace(go.Bar(
-            x=rng_stats["rango_km"].astype(str), y=rng_stats["mediana"],
+            x=rng["rango_km"].astype(str), y=rng["mediana"],
             name="Precio mediano", marker_color="#3b82f6",
-            text=rng_stats["mediana"].round(1).astype(str)+"M", textposition="outside",
+            text=rng["mediana"].round(1).astype(str)+"M", textposition="outside",
         ), secondary_y=False)
         fig2.add_trace(go.Scatter(
-            x=rng_stats["rango_km"].astype(str), y=rng_stats["avisos"],
+            x=rng["rango_km"].astype(str), y=rng["avisos"],
             name="Avisos", mode="lines+markers", marker_color="#f59e0b",
         ), secondary_y=True)
         fig2.update_yaxes(title_text="Precio mediano (M CLP)", secondary_y=False)
@@ -351,12 +330,12 @@ with tab3:
         st.plotly_chart(fig2, use_container_width=True)
 
 
-# ── TAB 4: Combustible / Transmisión ─────────────────────────────────────────
+# ── TAB 4: Combustible / Transmisión / Condición ─────────────────────────────
 with tab4:
     c1, c2 = st.columns(2)
 
     with c1:
-        df_cb = dff.dropna(subset=["combustible"])
+        df_cb = dff.dropna(subset=["combustible"]) if "combustible" in dff.columns else pd.DataFrame()
         if not df_cb.empty:
             cb = (
                 df_cb.groupby("combustible")["precio_m"]
@@ -373,40 +352,44 @@ with tab4:
             )
             fig.update_layout(showlegend=False, margin=dict(t=50, b=10))
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sin datos de combustible en la selección actual.")
 
     with c2:
-        df_tr = dff.dropna(subset=["transmision"])
-        if not df_tr.empty:
-            tr = (
-                df_tr.groupby("transmision")["precio_m"]
+        if "region" in dff.columns:
+            reg = (
+                dff.dropna(subset=["region"])
+                .groupby("region")["precio_m"]
                 .agg(mediana="median", avisos="count")
-                .query("avisos >= 3").sort_values("mediana", ascending=False)
+                .query("avisos >= 3").nlargest(10, "avisos")
+                .sort_values("mediana", ascending=False)
             )
             fig2 = px.bar(
-                tr.reset_index(), x="transmision", y="mediana",
-                color="transmision", color_discrete_sequence=COLORS,
-                text=tr["mediana"].round(1).astype(str).values+"M",
-                labels={"transmision": "", "mediana": "Precio mediano (M CLP)"},
-                title="⚙️ Precio por transmisión",
+                reg.reset_index(), y="region", x="mediana", orientation="h",
+                color="mediana", color_continuous_scale="Blues",
+                text=reg["mediana"].round(1).astype(str).values+"M",
+                labels={"region": "", "mediana": "Precio mediano (M CLP)"},
+                title="📍 Precio mediano por región",
                 template=TEMPLATE, height=350,
             )
-            fig2.update_layout(showlegend=False, margin=dict(t=50, b=10))
+            fig2.update_layout(coloraxis_showscale=False, margin=dict(t=50, l=10, b=10))
             st.plotly_chart(fig2, use_container_width=True)
 
     # Nuevo vs Usado por marca
     top6 = dff["marca"].value_counts().head(6).index.tolist()
-    df_cv = dff[dff["marca"].isin(top6)]
-    fig3 = px.box(
-        df_cv, x="condicion_es", y="precio_m", color="condicion_es",
-        facet_col="marca", facet_col_wrap=3,
-        color_discrete_map={"Nuevo": "#10b981", "Usado": "#f59e0b", "No especificado": "#94a3b8"},
-        labels={"condicion_es": "", "precio_m": "Precio (M CLP)"},
-        title="🆕 Nuevo vs Usado por marca (Top 6)",
-        template=TEMPLATE, height=420,
-    )
-    fig3.update_layout(showlegend=False, margin=dict(t=60, b=10))
-    fig3.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-    st.plotly_chart(fig3, use_container_width=True)
+    df_cv = dff[dff["marca"].isin(top6) & dff["condicion"].isin(["Nuevo", "Usado"])]
+    if not df_cv.empty:
+        fig3 = px.box(
+            df_cv, x="condicion", y="precio_m", color="condicion",
+            facet_col="marca", facet_col_wrap=3,
+            color_discrete_map={"Nuevo": "#10b981", "Usado": "#f59e0b"},
+            labels={"condicion": "", "precio_m": "Precio (M CLP)"},
+            title="🆕 Nuevo vs Usado por marca (Top 6)",
+            template=TEMPLATE, height=420,
+        )
+        fig3.update_layout(showlegend=False, margin=dict(t=60, b=10))
+        fig3.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+        st.plotly_chart(fig3, use_container_width=True)
 
 
 # ── TAB 5: Top modelos ────────────────────────────────────────────────────────
@@ -416,7 +399,7 @@ with tab5:
 
     mod_stats = (
         df_mod.groupby("marca_modelo")
-        .agg(avisos=("id", "count"), mediana=("precio_m", "median"))
+        .agg(avisos=("url", "count"), mediana=("precio_m", "median"))
         .reset_index()
     )
 
@@ -425,11 +408,10 @@ with tab5:
         top_of = mod_stats.nlargest(15, "avisos")
         fig = px.bar(
             top_of, y="marca_modelo", x="avisos", orientation="h",
-            color="avisos", color_continuous_scale="Blues",
-            text="avisos",
+            color="avisos", color_continuous_scale="Blues", text="avisos",
             labels={"marca_modelo": "", "avisos": "Avisos"},
             title="🏆 Top 15 — Más ofertados",
-            template=TEMPLATE, height=450,
+            template=TEMPLATE, height=480,
         )
         fig.update_layout(coloraxis_showscale=False, margin=dict(t=50, l=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
@@ -442,37 +424,31 @@ with tab5:
             text=top_eco["mediana"].round(1).astype(str)+"M",
             labels={"marca_modelo": "", "mediana": "Precio mediano (M CLP)"},
             title="💚 Top 15 — Más económicos",
-            template=TEMPLATE, height=450,
+            template=TEMPLATE, height=480,
         )
         fig2.update_layout(coloraxis_showscale=False, margin=dict(t=50, l=10, b=10))
         st.plotly_chart(fig2, use_container_width=True)
 
-    # Bubble chart
+    # Bubble chart: precio vs antigüedad vs volumen
     df_bub = (
         dff.groupby("marca").agg(
             precio_med=("precio_m", "median"),
             ant_prom=("antiguedad", "mean"),
-            avisos=("id", "count"),
+            avisos=("url", "count"),
         ).reset_index().dropna()
     )
     fig3 = px.scatter(
         df_bub, x="ant_prom", y="precio_med",
-        size="avisos", color="marca", text="marca",
-        size_max=60,
-        labels={
-            "ant_prom": "Antigüedad promedio (años)",
-            "precio_med": "Precio mediano (M CLP)",
-        },
-        title="🫧 Precio vs Antigüedad vs Volumen",
-        color_discrete_sequence=COLORS, template=TEMPLATE, height=420,
+        size="avisos", color="marca", text="marca", size_max=60,
+        labels={"ant_prom": "Antigüedad promedio (años)", "precio_med": "Precio mediano (M CLP)"},
+        title="🫧 Precio vs Antigüedad vs Volumen de avisos",
+        color_discrete_sequence=COLORS, template=TEMPLATE, height=440,
     )
     fig3.update_traces(textposition="top center")
     fig3.update_layout(showlegend=False, margin=dict(t=50, b=10))
     st.plotly_chart(fig3, use_container_width=True)
 
+
 # ─── Footer ───────────────────────────────────────────────────────────────────
 st.divider()
-st.caption(
-    "🚗 **Chile Auto Stats** · Fuente: MercadoLibre Chile API (pública) · "
-    f"Datos a {ts} · Tipo de cambio: 1 USD = {usd_clp:,.0f} CLP"
-)
+st.caption(f"🚗 **Chile Auto Stats** · Fuente: Autocosmos.cl · Datos a {ts}")
