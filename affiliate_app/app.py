@@ -20,7 +20,7 @@ from database import (
 from calculations import (
     calc_all_payments, compute_kpis, top_programs, income_by_month,
     estimate_federal_tax, estimate_se_tax, needs_1099,
-    quarterly_estimated_tax,
+    quarterly_estimated_tax, payment_with_currency,
 )
 
 # ── Page config ────────────────────────────────────────────────────────────────
@@ -73,6 +73,7 @@ def _render_member_card(m):
         c1.write(f"**Email:** {m.get('email') or '—'}")
         c2.write(f"**Tipo empleo:** {m['employment_type']}")
         c2.write(f"**Estructura pago:** {label}")
+        c2.write(f"**Moneda:** {m.get('currency', 'USD')}")
         if m["payment_type"] == "salario_fijo":
             c3.write(f"**Salario/período:** {fmt_usd(m['base_amount'])}")
         elif m["payment_type"] == "comisión":
@@ -491,12 +492,18 @@ elif page == "team":
                 help="Para tipo: Reparto de Ingresos (socios)",
             )
 
-            c8, c9 = st.columns(2)
+            c8, c9, c10 = st.columns(3)
             start_date = c8.date_input("Fecha de inicio",
                                         value=date.fromisoformat(existing["start_date"])
                                         if existing.get("start_date") else date.today())
             status = c9.selectbox("Estado", ["activo", "inactivo"],
                                    index=0 if existing.get("status", "activo") == "activo" else 1)
+            currency = c10.selectbox(
+                "Moneda de pago",
+                ["USD", "CLP"],
+                index=0 if existing.get("currency", "USD") == "USD" else 1,
+                help="USD: pago en dólares. CLP: pago en pesos chilenos (aplica PPM si es boleta).",
+            )
             notes = st.text_area("Notas / acuerdo", value=existing.get("notes", ""), height=80)
 
             if st.form_submit_button("💾 Guardar"):
@@ -508,7 +515,7 @@ elif page == "team":
                         "name": name, "role": role, "employment_type": emp_type,
                         "email": email, "payment_type": payment_type,
                         "base_amount": base_amount, "commission_rate": commission_rate,
-                        "revenue_share_pct": revenue_share_pct,
+                        "revenue_share_pct": revenue_share_pct, "currency": currency,
                         "start_date": str(start_date), "status": status, "notes": notes,
                     })
                     st.success(f"✅ Miembro '{name}' guardado.")
@@ -551,6 +558,15 @@ elif page == "payments":
         if team_df.empty:
             st.warning("No hay miembros activos en el equipo. Agrega socios o trabajadores primero.")
         else:
+            has_clp = "CLP" in team_df.get("currency", pd.Series(["USD"])).values
+            usd_clp_rate = 1.0
+            if has_clp:
+                usd_clp_rate = st.number_input(
+                    "Tipo de cambio USD → CLP para este período",
+                    min_value=100.0, max_value=2000.0, step=1.0, value=950.0,
+                    help="Ingresa el tipo de cambio vigente al cierre del período.",
+                )
+
             st.markdown("#### Distribución Calculada")
             items = calc_all_payments(team_df, total_income, net_income)
             items_df = pd.DataFrame(items)
@@ -565,38 +581,50 @@ elif page == "payments":
             bonuses = {}
             for _, row in items_df.iterrows():
                 bonuses[row["member_id"]] = st.number_input(
-                    f"Bono adicional para {row['name']} ($)",
+                    f"Bono adicional para {row['name']} (USD)",
                     min_value=0.0, step=50.0, key=f"bonus_{row['member_id']}",
                 )
 
-            # Recalculate with bonuses
+            # Recalculate with bonuses and currency
             final_items = []
+            member_map = {int(r["id"]): r.to_dict() for _, r in team_df.iterrows()}
             for item in items:
                 b = bonuses.get(item["member_id"], 0)
                 item["bonus_amount"] = b
                 item["total_gross"] = item["base_amount"] + item["commission_amount"] + b
-                final_items.append(item)
+                member = member_map.get(item["member_id"], {})
+                final_items.append(payment_with_currency(item, member, usd_clp_rate))
 
             final_df = pd.DataFrame(final_items)
             final_df = final_df.merge(
-                team_df[["id", "name", "role", "employment_type"]],
+                team_df[["id", "name", "role", "employment_type", "currency"]],
                 left_on="member_id", right_on="id", how="left",
             )
-            final_df["total_gross_fmt"] = final_df["total_gross"].map(fmt_usd)
 
-            display_cols = {
-                "name": "Nombre", "role": "Rol",
-                "base_amount": "Base ($)", "commission_amount": "Comisión ($)",
-                "bonus_amount": "Bono ($)", "total_gross": "Total Bruto ($)",
-            }
-            disp = final_df[list(display_cols.keys())].copy()
-            disp.columns = list(display_cols.values())
-            for col in ["Base ($)", "Comisión ($)", "Bono ($)", "Total Bruto ($)"]:
-                disp[col] = disp[col].map(lambda x: f"${x:,.2f}")
-            st.dataframe(disp, use_container_width=True, hide_index=True)
+            # Build display table
+            rows = []
+            for _, r in final_df.iterrows():
+                row = {
+                    "Nombre": r["name"], "Rol": r["role"],
+                    "Base (USD)": fmt_usd(r["base_amount"]),
+                    "Comisión (USD)": fmt_usd(r["commission_amount"]),
+                    "Bono (USD)": fmt_usd(r["bonus_amount"]),
+                    "Total Bruto (USD)": fmt_usd(r["total_gross"]),
+                    "Moneda": r["currency"],
+                }
+                if r["currency"] == "CLP" and r["gross_clp"] is not None:
+                    row["Total Bruto (CLP)"] = f"${r['gross_clp']:,.0f}"
+                    row["PPM 12.25% (CLP)"] = f"-${r['ppm_clp']:,.0f}"
+                    row["Neto a Pagar (CLP)"] = f"${r['net_clp']:,.0f}"
+                else:
+                    row["Total Bruto (CLP)"] = "—"
+                    row["PPM 12.25% (CLP)"] = "—"
+                    row["Neto a Pagar (CLP)"] = "—"
+                rows.append(row)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
             total_payments = final_df["total_gross"].sum()
-            st.metric("Total a Distribuir", fmt_usd(total_payments))
+            st.metric("Total a Distribuir (USD)", fmt_usd(total_payments))
 
             # Chart
             if not final_df.empty:

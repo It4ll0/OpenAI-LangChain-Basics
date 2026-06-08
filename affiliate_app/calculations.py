@@ -46,6 +46,45 @@ def calc_all_payments(team_df: pd.DataFrame, gross_income: float,
     return items
 
 
+# ── CLP conversion & Chilean PPM ─────────────────────────────────────────────
+
+PPM_RATE = 0.1225  # Retención boleta de honorarios Chile 2024
+
+
+def to_clp(usd_amount: float, usd_clp_rate: float) -> float:
+    return round(usd_amount * usd_clp_rate, 0)
+
+
+def calc_ppm(gross_clp: float) -> float:
+    """Retención PPM (12.25%) para boleta de honorarios en Chile."""
+    return round(gross_clp * PPM_RATE, 0)
+
+
+def payment_with_currency(item: dict, member: dict, usd_clp_rate: float) -> dict:
+    """
+    Augments a payment item with CLP amounts and PPM if the member uses CLP.
+    employment_type 'Boleta (Chile)' triggers PPM retention.
+    """
+    currency = member.get("currency", "USD")
+    emp_type = member.get("employment_type", "")
+    gross_usd = item["total_gross"]
+
+    result = {**item, "currency": currency, "usd_clp_rate": usd_clp_rate}
+
+    if currency == "CLP":
+        gross_clp = to_clp(gross_usd, usd_clp_rate)
+        ppm = calc_ppm(gross_clp) if "Boleta" in emp_type or "1099" in emp_type else 0
+        result["gross_clp"] = gross_clp
+        result["ppm_clp"] = ppm
+        result["net_clp"] = gross_clp - ppm
+    else:
+        result["gross_clp"] = None
+        result["ppm_clp"] = None
+        result["net_clp"] = None
+
+    return result
+
+
 # ── US Tax estimates ──────────────────────────────────────────────────────────
 
 # 2024 federal brackets (single filer) – approximate for planning purposes

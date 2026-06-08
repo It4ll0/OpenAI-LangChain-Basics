@@ -49,6 +49,7 @@ def init_db():
             base_amount REAL DEFAULT 0,
             commission_rate REAL DEFAULT 0,
             revenue_share_pct REAL DEFAULT 0,
+            currency TEXT DEFAULT 'USD',
             start_date DATE,
             status TEXT DEFAULT 'activo',
             notes TEXT
@@ -206,23 +207,24 @@ def upsert_member(data: dict):
             """UPDATE team_members
                SET name=?, role=?, employment_type=?, email=?,
                    payment_type=?, base_amount=?, commission_rate=?,
-                   revenue_share_pct=?, start_date=?, status=?, notes=?
+                   revenue_share_pct=?, currency=?, start_date=?, status=?, notes=?
                WHERE id=?""",
             (data["name"], data["role"], data["employment_type"], data["email"],
              data["payment_type"], data["base_amount"], data["commission_rate"],
-             data["revenue_share_pct"], data.get("start_date"), data["status"],
+             data["revenue_share_pct"], data.get("currency", "USD"),
+             data.get("start_date"), data["status"],
              data.get("notes", ""), data["id"]),
         )
     else:
         conn.execute(
             """INSERT INTO team_members
                (name, role, employment_type, email, payment_type, base_amount,
-                commission_rate, revenue_share_pct, start_date, status, notes)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                commission_rate, revenue_share_pct, currency, start_date, status, notes)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data["name"], data["role"], data["employment_type"], data["email"],
              data["payment_type"], data["base_amount"], data["commission_rate"],
-             data["revenue_share_pct"], data.get("start_date"),
-             data.get("status", "activo"), data.get("notes", "")),
+             data["revenue_share_pct"], data.get("currency", "USD"),
+             data.get("start_date"), data.get("status", "activo"), data.get("notes", "")),
         )
     conn.commit()
     conn.close()
